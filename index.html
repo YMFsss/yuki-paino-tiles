@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Melody Tiles - Custom Song</title>
     <style>
         body {
@@ -15,6 +15,8 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
             color: white;
+            /* Prevents accidental pull-to-refresh or native scrolling on mobile gestures */
+            touch-action: none; 
         }
         #gameContainer {
             position: relative;
@@ -40,22 +42,38 @@
             flex-direction: column;
             justify-content: center;
             align-items: center;
+            gap: 15px;
         }
         .interactive {
             pointer-events: auto;
         }
-        #fileInputLabel {
-            padding: 12px 24px;
-            background: #3278f0;
+        .btn {
+            padding: 12px 30px;
             color: white;
             border-radius: 25px;
             cursor: pointer;
             font-weight: bold;
-            transition: background 0.2s;
+            transition: all 0.2s;
+            text-align: center;
+            border: none;
+            font-size: 16px;
+        }
+        #pcBtn {
+            background: #3278f0;
             box-shadow: 0 4px 15px rgba(50,120,240,0.4);
         }
-        #fileInputLabel:hover {
-            background: #2262d0;
+        #mobileBtn {
+            background: #e68c0a;
+            box-shadow: 0 4px 15px rgba(230,140,10,0.4);
+        }
+        #fileInputLabel {
+            background: #28a745;
+            box-shadow: 0 4px 15px rgba(40,167,69,0.4);
+            display: none;
+        }
+        .btn:hover {
+            transform: scale(1.05);
+            filter: brightness(1.1);
         }
         #fileInput {
             display: none;
@@ -75,7 +93,10 @@
     <div id="gameContainer">
         <canvas id="gameCanvas" width="400" height="600"></canvas>
         <div id="uiLayer">
-            <label id="fileInputLabel" class="interactive">
+            <button id="pcBtn" class="btn interactive">Play on PC (D F J K)</button>
+            <button id="mobileBtn" class="btn interactive">Play on Mobile (Touch)</button>
+
+            <label id="fileInputLabel" class="btn interactive">
                 Choose an Audio File
                 <input type="file" id="fileInput" accept="audio/*" />
             </label>
@@ -88,6 +109,8 @@
         const ctx = canvas.getContext("2d");
         const fileInput = document.getElementById("fileInput");
         const fileInputLabel = document.getElementById("fileInputLabel");
+        const pcBtn = document.getElementById("pcBtn");
+        const mobileBtn = document.getElementById("mobileBtn");
         const loadingText = document.getElementById("loadingText");
 
         // ======================
@@ -97,11 +120,10 @@
         const COLUMN_WIDTH = 400 / 4;
         const TILE_HEIGHT = 100;
         const HIT_LINE_Y = 600 - 120;
-        
-        // Time it takes for a tile to travel from y=0 to y=HIT_LINE_Y (in seconds)
         const SCROLL_DURATION = 1.2; 
 
-        let currentState = "MENU";
+        let currentState = "MENU"; 
+        let selectedDevice = null; // "PC" or "MOBILE"
         let activeTiles = [];
         let noteTimes = [];
         let score = 0;
@@ -116,16 +138,38 @@
         let songStartTime = 0;
 
         // ======================
-        // 1. Audio Processing
+        // 1. Device Selection Setup
+        // ======================
+        function initAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        pcBtn.addEventListener("click", () => {
+            initAudioContext();
+            selectedDevice = "PC";
+            showUploadOption();
+        });
+
+        mobileBtn.addEventListener("click", () => {
+            initAudioContext();
+            selectedDevice = "MOBILE";
+            showUploadOption();
+        });
+
+        function showUploadOption() {
+            pcBtn.style.display = "none";
+            mobileBtn.style.display = "none";
+            fileInputLabel.style.display = "block";
+        }
+
+        // ======================
+        // 2. Audio Processing
         // ======================
         fileInput.addEventListener("change", async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
-            // Initialize AudioContext on user gesture
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
 
             fileInputLabel.style.display = "none";
             loadingText.style.display = "block";
@@ -135,7 +179,6 @@
                 const arrayBuffer = await file.arrayBuffer();
                 const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
-                // Analyze beats and clean up layout variables
                 noteTimes = detectOnsets(audioBuffer);
 
                 if (userAudio) {
@@ -146,7 +189,6 @@
                 userAudio = new Audio(URL.createObjectURL(file));
                 loadingText.style.display = "none";
                 
-                // Slight delay to allow browser thread to catch its breath
                 setTimeout(startGame, 500);
             } catch (err) {
                 alert("Error parsing audio file. Try an MP3 or WAV.");
@@ -156,7 +198,6 @@
             }
         });
 
-        // Dynamic Peak Threshold Algorithm 
         function detectOnsets(audioBuffer) {
             const channelData = audioBuffer.getChannelData(0);
             const sampleRate = audioBuffer.sampleRate;
@@ -164,7 +205,7 @@
             const times = [];
             
             let lastPeakTime = 0;
-            const minInterval = 0.28; // Prevents tiles from overlapping too densely
+            const minInterval = 0.28; 
 
             for (let i = 0; i < channelData.length; i += blockSize) {
                 const block = channelData.slice(i, i + blockSize);
@@ -175,7 +216,6 @@
                 const rms = Math.sqrt(sum / block.length);
                 const currentTime = i / sampleRate;
 
-                // Threshold filter for structural transients (beats/melodies)
                 if (rms > 0.025 && (currentTime - lastPeakTime) > minInterval) {
                     times.push(currentTime);
                     lastPeakTime = currentTime;
@@ -185,18 +225,17 @@
         }
 
         // ======================
-        // 2. Gameplay Management
+        // 3. Gameplay Management
         // ======================
         function startGame() {
             score = 0;
             hp = 100;
             feedbackTimer = 0;
             
-            // Map raw timestamps to concrete game Tile entities
             activeTiles = noteTimes.map(time => {
                 const col = Math.floor(Math.random() * 4);
                 return {
-                    spawnTime: time - SCROLL_DURATION, // Spawn early so it hits the line perfectly on time
+                    spawnTime: time - SCROLL_DURATION, 
                     targetTime: time,
                     col: col,
                     hit: false,
@@ -223,19 +262,15 @@
             osc.stop(audioCtx.currentTime + 0.1);
         }
 
-        window.addEventListener("keydown", (e) => {
-            if (currentState !== "PLAYING") return;
-            const idx = TRACK_KEYS.indexOf(e.key.toLowerCase());
-            if (idx === -1) return;
-
+        // Common Core Hit Check Logic shared by Keydown and Touchstart
+        function processHitRegister(trackIndex) {
             const currentAudioTime = audioCtx.currentTime - songStartTime;
             let handled = false;
 
             for (let t of activeTiles) {
-                if (t.col === idx && !t.hit && !t.missed) {
+                if (t.col === trackIndex && !t.hit && !t.missed) {
                     const timeDiff = Math.abs(currentAudioTime - t.targetTime);
                     
-                    // Hit detection window (in seconds)
                     if (timeDiff < 0.15) { 
                         t.hit = true;
                         handled = true;
@@ -262,13 +297,47 @@
                 feedbackColor = "#dc3545";
                 feedbackTimer = 30;
             }
+        }
+
+        // PC Key Down Input
+        window.addEventListener("keydown", (e) => {
+            if (currentState !== "PLAYING" || selectedDevice !== "PC") return;
+            const idx = TRACK_KEYS.indexOf(e.key.toLowerCase());
+            if (idx !== -1) {
+                processHitRegister(idx);
+            }
         });
 
+        // Mobile Touch Processing Screen Mapping
+        canvas.addEventListener("touchstart", (e) => {
+            if (currentState !== "PLAYING" || selectedDevice !== "MOBILE") return;
+            
+            // Prevent zooming/double-tap delays natively
+            e.preventDefault(); 
+            
+            // Track dimensions bounding box relative to client view
+            const rect = canvas.getBoundingClientRect();
+            
+            // Process all active continuous touch points (multi-touch support)
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                
+                // Get tap location transformed into native canvas coordinates (0 to 400 px)
+                const relativeX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
+                
+                // Determine target track column (0, 1, 2, or 3)
+                const trackIdx = Math.floor(relativeX / COLUMN_WIDTH);
+                
+                if (trackIdx >= 0 && trackIdx < 4) {
+                    processHitRegister(trackIdx);
+                }
+            }
+        }, { passive: false });
+
         // ======================
-        // 3. Engine Loop
+        // 4. Engine Loop
         // ======================
         function update() {
-            // Draw background tracks
             ctx.fillStyle = "#1e1e1e";
             ctx.fillRect(0, 0, 400, 600);
 
@@ -294,24 +363,24 @@
                 ctx.fillStyle = "#aaaaaa";
                 ctx.font = "16px Arial";
                 ctx.textAlign = "center";
-                ctx.fillText("Controls: D  F  J  K", 200, 400);
+                if (!selectedDevice) {
+                    ctx.fillText("Select your platform to play", 200, 250);
+                } else {
+                    const controlHint = selectedDevice === "PC" ? "Controls: D  F  J  K" : "Controls: Tap Lanes Below Hit Line";
+                    ctx.fillText(controlHint, 200, 400);
+                }
             }
 
             if (currentState === "PLAYING") {
                 const currentAudioTime = audioCtx.currentTime - songStartTime;
 
-                // Process/Render Tiles
                 for (let i = 0; i < activeTiles.length; i++) {
                     const t = activeTiles[i];
                     
-                    // Only process tiles that should be visible on screen
                     if (currentAudioTime >= t.spawnTime) {
-                        
-                        // Calculate exact Y coordinate based on elapsed time ratio
                         const progress = (currentAudioTime - t.spawnTime) / SCROLL_DURATION;
                         const currentY = progress * HIT_LINE_Y - TILE_HEIGHT;
 
-                        // Check for natural miss conditions
                         if (currentAudioTime > t.targetTime + 0.15 && !t.hit && !t.missed) {
                             t.missed = true;
                             hp -= 8;
@@ -320,7 +389,6 @@
                             feedbackTimer = 30;
                         }
 
-                        // Draw if not struck
                         if (!t.hit && currentY < 600) {
                             ctx.fillStyle = t.missed ? "#442222" : "#ffffff";
                             ctx.fillRect(t.col * COLUMN_WIDTH + 4, currentY, COLUMN_WIDTH - 8, TILE_HEIGHT);
@@ -328,7 +396,7 @@
                     }
                 }
 
-                // UI Status Display (HP Bar)
+                // UI Display Panel
                 ctx.fillStyle = "rgba(0,0,0,0.4)";
                 ctx.fillRect(0, 0, 400, 50);
 
@@ -340,7 +408,6 @@
                 ctx.textAlign = "left";
                 ctx.fillText("SCORE: " + score, 200, 30);
 
-                // Visual Judgement Feedback
                 if (feedbackTimer > 0) {
                     ctx.fillStyle = feedbackColor;
                     ctx.font = "bold 28px Arial";
@@ -349,12 +416,16 @@
                     feedbackTimer--;
                 }
 
-                // Failure Check or Song Completion Check
                 if (hp <= 0 || (userAudio && userAudio.ended)) {
                     currentState = "MENU";
                     userAudio.pause();
-                    fileInputLabel.style.display = "block";
-                    fileInput.value = ""; // Clear file choice
+                    
+                    // Show initial structural setup buttons for replay
+                    pcBtn.style.display = "block";
+                    mobileBtn.style.display = "block";
+                    fileInputLabel.style.display = "none";
+                    fileInput.value = ""; 
+                    selectedDevice = null;
                 }
             }
 
