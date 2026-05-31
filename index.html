@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Melody Tiles Endless</title>
+    <title>Melody Tiles - Custom Song</title>
     <style>
         body {
             margin: 0;
@@ -14,333 +14,239 @@
             height: 100vh;
             font-family: Arial, sans-serif;
             overflow: hidden;
+            color: white;
         }
-
         #gameContainer {
             position: relative;
             width: 400px;
             height: 600px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
-
         canvas {
             background: #eee;
             display: block;
+        }
+        #fileInput {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 999;
+            padding: 8px;
+            background: white;
+            color: black;
+        }
+        #loadingText {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 20px;
+            color: #3278f0;
+            display: none;
         }
     </style>
 </head>
 <body>
     <div id="gameContainer">
+        <input type="file" id="fileInput" accept="audio/*" />
+        <div id="loadingText">Analyzing your song...</div>
         <canvas id="gameCanvas" width="400" height="600"></canvas>
     </div>
 
     <script>
         const canvas = document.getElementById("gameCanvas");
         const ctx = canvas.getContext("2d");
+        const fileInput = document.getElementById("fileInput");
+        const loadingText = document.getElementById("loadingText");
 
-        // --- GAME SYSTEM SETTINGS ---
+        // ======================
+        // 游戏核心设置
+        // ======================
         const TRACK_KEYS = ['d', 'f', 'j', 'k'];
         const COLUMN_WIDTH = 400 / 4;
         const TILE_HEIGHT = 130;
         const HIT_LINE_Y = 600 - 120;
 
-        // Game States
         let currentState = "MENU";
         let activeTiles = [];
-        let performancePoints = 500;
-        let hp = 100;
-        let currentRound = 1;
-        let tileSpeed = 6;
-        let baseTileSpeed = 7;
-        let currentDifficulty = "MEDIUM";
-        let score = 0;
-        let feedbackText = "";
-        let feedbackColor = "#000";
-        let feedbackTimer = 0;
-        let bufferStartTicks = 0;
-        let gameStartTicks = 0;
-
-        // --- AUDIO (NO EXTERNAL FILES NEEDED) ---
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Disable unused external music (causes errors without a file)
-        const music = {
-            play: () => {},
-            pause: () => {},
-            currentTime: 0,
-            ended: false
-        };
-
-        // Background disabled (no external image needed)
-        let hasBackground = false;
-
-        // 🎵 AUTO-GENERATED NOTES (plays without music file)
-        let originalMelodyTimes = [];
-        for (let t = 1.0; t < 300; t += 0.4 + Math.random() * 0.6) {
-            originalMelodyTimes.push(t);
-        }
         let noteTimes = [];
+        let tileSpeed = 7;
+        let score = 0;
+        let hp = 100;
+        let feedbackText = "";
+        let feedbackColor = "";
+        let feedbackTimer = 0;
+        let gameStartTicks = 0;
+        let userAudio = null;
 
-        // Tap sound effect (built-in, no files)
-        function playHitSound() {
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            osc.type = "sine";
-            osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
-            gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
-            osc.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.08);
-        }
+        // 音频上下文（用于分析歌曲）
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // UI Buttons
-        const buttons = {
-            EASY: { x: 100, y: 240, w: 200, h: 50, label: "EASY LOOP", color: "#28a745" },
-            MEDIUM: { x: 100, y: 310, w: 200, h: 50, label: "NORMAL LOOP", color: "#e68c0a" },
-            HARD: { x: 100, y: 380, w: 200, h: 50, label: "CHAOS LOOP", color: "#dc3545" },
-            STOP: { x: 400 - 90, y: 60, w: 75, h: 35, label: "STOP", color: "#dc3545" },
-            RESTART: { x: 120, y: 300 + 80, w: 160, h: 60, label: "MAIN MENU", color: "#3278f0" }
-        };
+        // ======================
+        // 1. 用户上传歌曲 → 自动分析节奏生成音符
+        // ======================
+        fileInput.addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
 
-        // Grade system
-        function getGrade(points) {
-            if (points >= 900) return "S";
-            if (points >= 750) return "A";
-            if (points >= 500) return "B";
-            if (points >= 300) return "C";
-            return "D";
-        }
-
-        // Feedback text
-        function triggerFeedback(text, color, length = 30) {
-            feedbackText = text;
-            feedbackColor = color;
-            feedbackTimer = length;
-        }
-
-        // Difficulty settings
-        function generateDifficultyNotes(mode) {
-            if (mode === "EASY") {
-                baseTileSpeed = 5;
-                return originalMelodyTimes.filter((_, i) => i % 3 === 0);
-            } else if (mode === "MEDIUM") {
-                baseTileSpeed = 7;
-                return originalMelodyTimes.filter((_, i) => i % 2 === 0);
-            } else {
-                baseTileSpeed = 10;
-                return [...originalMelodyTimes];
-            }
-        }
-
-        // Start game
-        function startGame(mode) {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            activeTiles = [];
-            performancePoints = 500;
-            hp = 100;
-            currentRound = 1;
-            score = 0;
-            feedbackText = "";
-            currentDifficulty = mode;
-
-            noteTimes = generateDifficultyNotes(mode);
-            tileSpeed = baseTileSpeed;
-
+            loadingText.style.display = "block";
             currentState = "BUFFER";
-            bufferStartTicks = Date.now();
-        }
 
-        // Next round
-        function startNextRound() {
-            currentRound++;
-            activeTiles = [];
-            noteTimes = generateDifficultyNotes(currentDifficulty);
-            tileSpeed = baseTileSpeed + ((currentRound - 1) * 1.5);
-            triggerFeedback(`ROUND ${currentRound}!`, "#8232c8", 90);
-            currentState = "BUFFER";
-            bufferStartTicks = Date.now();
-        }
+            // 读取音频文件
+            const arrayBuffer = await file.arrayBuffer();
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
-        // Mouse click handler
-        window.addEventListener("mousedown", (e) => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = e.clientX - rect.left;
-            const my = e.clientY - rect.top;
+            // 分析节奏 → 生成 noteTimes（游戏下落时间点）
+            noteTimes = detectOnsets(audioBuffer);
 
-            if (currentState === "MENU") {
-                if (mx >= buttons.EASY.x && mx <= buttons.EASY.x+buttons.EASY.w && my >= buttons.EASY.y && my <= buttons.EASY.y+buttons.EASY.h) startGame("EASY");
-                if (mx >= buttons.MEDIUM.x && mx <= buttons.MEDIUM.x+buttons.MEDIUM.w && my >= buttons.MEDIUM.y && my <= buttons.MEDIUM.y+buttons.MEDIUM.h) startGame("MEDIUM");
-                if (mx >= buttons.HARD.x && mx <= buttons.HARD.x+buttons.HARD.w && my >= buttons.HARD.y && my <= buttons.HARD.y+buttons.HARD.h) startGame("HARD");
-            } else if (currentState === "GAME_OVER") {
-                if (mx >= buttons.RESTART.x && mx <= buttons.RESTART.x+buttons.RESTART.w && my >= buttons.RESTART.y && my <= buttons.RESTART.y+buttons.RESTART.h) currentState = "MENU";
-            } else if (currentState === "PLAYING" || currentState === "BUFFER") {
-                if (mx >= buttons.STOP.x && mx <= buttons.STOP.x+buttons.STOP.w && my >= buttons.STOP.y && my <= buttons.STOP.y+buttons.STOP.h) {
-                    currentState = "MENU";
-                }
-            }
+            // 创建玩家的歌曲
+            userAudio = new Audio(URL.createObjectURL(file));
+
+            loadingText.style.display = "none";
+            startGame();
         });
 
-        // Keyboard controls (D, F, J, K)
+        // 音频节奏检测算法（浏览器端自动找鼓点/旋律）
+        function detectOnsets(audioBuffer) {
+            const channelData = audioBuffer.getChannelData(0);
+            const blockSize = 1024;
+            const times = [];
+            let lastPeak = 0;
+
+            for (let i = 0; i < channelData.length; i += blockSize) {
+                const block = channelData.slice(i, i + blockSize);
+                let sum = 0;
+                for (let s of block) sum += s * s;
+                const rms = Math.sqrt(sum / block.length);
+
+                if (rms > 0.015 && (i / audioBuffer.sampleRate) - lastPeak > 0.3) {
+                    times.push(i / audioBuffer.sampleRate);
+                    lastPeak = i / audioBuffer.sampleRate;
+                }
+            }
+            return times;
+        }
+
+        // ======================
+        // 2. 游戏逻辑
+        // ======================
+        function startGame() {
+            activeTiles = [];
+            score = 0;
+            hp = 100;
+            feedbackTimer = 0;
+            currentState = "PLAYING";
+            gameStartTicks = Date.now();
+            userAudio.play();
+        }
+
+        // 点击音效
+        function playHitSound() {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = "sine";
+            osc.frequency.value = 587;
+            gain.gain.value = 0.2;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        // 键盘敲击
         window.addEventListener("keydown", (e) => {
             if (currentState !== "PLAYING") return;
-            const keyIndex = TRACK_KEYS.indexOf(e.key.toLowerCase());
-            if (keyIndex === -1) return;
+            const idx = TRACK_KEYS.indexOf(e.key.toLowerCase());
+            if (idx === -1) return;
 
-            let hitSuccessful = false;
-            for (let tile of activeTiles) {
-                if (tile.col === keyIndex && !tile.hit) {
-                    let distance = Math.abs((tile.y + TILE_HEIGHT) - HIT_LINE_Y);
-                    
-                    if (distance <= 35) {
-                        tile.hit = true;
-                        performancePoints = Math.min(1000, performancePoints + 40);
-                        hp = Math.min(100, hp + 4);
+            let hit = false;
+            for (let t of activeTiles) {
+                if (t.col === idx && !t.hit) {
+                    const dist = Math.abs((t.y + TILE_HEIGHT) - HIT_LINE_Y);
+                    if (dist < 80) {
+                        t.hit = true;
                         score++;
-                        triggerFeedback("PERFECT!", "#28a745");
+                        feedbackText = dist < 40 ? "PERFECT!" : "GOOD";
+                        feedbackColor = dist < 40 ? "#28a745" : "#e68c0a";
+                        feedbackTimer = 20;
                         playHitSound();
-                        hitSuccessful = true;
-                        break;
-                    } else if (distance <= 75) {
-                        tile.hit = true;
-                        performancePoints = Math.min(1000, performancePoints + 15);
-                        hp = Math.min(100, hp + 1);
-                        score++;
-                        triggerFeedback("GOOD", "#e68c0a");
-                        playHitSound();
-                        hitSuccessful = true;
+                        hit = true;
                         break;
                     }
                 }
             }
-
-            if (!hitSuccessful) {
-                performancePoints = Math.max(0, performancePoints - 50);
-                hp = Math.max(0, hp - 8);
-                triggerFeedback("MISS!", "#dc3545");
+            if (!hit) {
+                hp -= 10;
+                feedbackText = "MISS";
+                feedbackColor = "#dc3545";
+                feedbackTimer = 20;
             }
         });
 
-        // Main game loop
+        // ======================
+        // 3. 主渲染循环
+        // ======================
         function update() {
-            // Background
             ctx.fillStyle = "#f5f5f5";
             ctx.fillRect(0, 0, 400, 600);
 
+            // 引导线
+            ctx.strokeStyle = "#999";
+            ctx.lineWidth = 2;
+            for (let i = 1; i < 4; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * COLUMN_WIDTH, 0);
+                ctx.lineTo(i * COLUMN_WIDTH, 600);
+                ctx.stroke();
+            }
+            ctx.strokeStyle = "#3296f0";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(0, HIT_LINE_Y);
+            ctx.lineTo(400, HIT_LINE_Y);
+            ctx.stroke();
+
             if (currentState === "MENU") {
-                ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-                ctx.fillRect(20, 60, 360, 420);
-                ctx.fillStyle = "#282828";
-                ctx.font = "bold 32px Arial";
+                ctx.fillStyle = "#222";
+                ctx.font = "bold 24px Arial";
                 ctx.textAlign = "center";
-                ctx.fillText("Melody Tiles Endless", 200, 130);
+                ctx.fillText("Upload a song to play!", 200, 250);
+            }
 
-                // Draw buttons
-                ['EASY', 'MEDIUM', 'HARD'].forEach(mode => {
-                    let b = buttons[mode];
-                    ctx.fillStyle = b.color;
-                    ctx.beginPath();
-                    ctx.roundRect(b.x, b.y, b.w, b.h, 8);
-                    ctx.fill();
-                    ctx.fillStyle = "#fff";
-                    ctx.font = "bold 20px Arial";
-                    ctx.fillText(b.label, b.x + b.w/2, b.y + b.h/2 + 7);
-                });
+            if (currentState === "PLAYING") {
+                const elapsed = (Date.now() - gameStartTicks) / 1000;
 
-            } else if (currentState === "BUFFER") {
-                drawGuidelines();
-                let passed = (Date.now() - bufferStartTicks) / 1000;
-                let countdown = 3 - Math.floor(passed);
-
-                if (countdown <= 0) {
-                    currentState = "PLAYING";
-                    gameStartTicks = Date.now();
-                } else {
-                    ctx.fillStyle = "#3278f0";
-                    ctx.font = "bold 40px Arial";
-                    ctx.textAlign = "center";
-                    ctx.fillText(countdown, 200, 270);
-                    ctx.font = "16px Arial";
-                    ctx.fillText(`ROUND ${currentRound}`, 200, 210);
-                }
-
-            } else if (currentState === "PLAYING") {
-                let elapsedTime = (Date.now() - gameStartTicks) / 1000;
-
-                // Auto next round
-                if (noteTimes.length === 0 && activeTiles.length === 0) {
-                    startNextRound();
-                }
-
-                // Game over
-                if (hp <= 0) {
-                    currentState = "GAME_OVER";
-                }
-
-                // Spawn tiles
-                if (noteTimes.length > 0 && elapsedTime >= noteTimes[0]) {
+                // 自动生成方块
+                if (noteTimes.length && elapsed >= noteTimes[0]) {
                     noteTimes.shift();
-                    let randomCol = Math.floor(Math.random() * 4);
-                    activeTiles.push({ 
-                        x: randomCol * COLUMN_WIDTH, 
-                        y: -TILE_HEIGHT, 
-                        col: randomCol, 
-                        hit: false 
-                    });
+                    const col = Math.floor(Math.random() * 4);
+                    activeTiles.push({ x: col * COLUMN_WIDTH, y: -TILE_HEIGHT, col, hit: false });
                 }
 
-                drawGuidelines();
-
-                // Update tiles
+                // 方块下落
                 for (let i = activeTiles.length - 1; i >= 0; i--) {
-                    let tile = activeTiles[i];
-                    tile.y += tileSpeed;
-
-                    if (!tile.hit) {
-                        ctx.fillStyle = "#28282d";
-                        ctx.fillRect(tile.x, tile.y, COLUMN_WIDTH, TILE_HEIGHT);
+                    const t = activeTiles[i];
+                    t.y += tileSpeed;
+                    if (!t.hit) {
+                        ctx.fillStyle = "#222";
+                        ctx.fillRect(t.x, t.y, COLUMN_WIDTH - 2, TILE_HEIGHT);
                     }
-
-                    // Missed tile
-                    if (tile.y > 600) {
-                        if (!tile.hit) {
-                            performancePoints = Math.max(0, performancePoints - 60);
-                            hp = Math.max(0, hp - 12);
-                            triggerFeedback("MISS!", "#dc3545");
-                        }
+                    if (t.y > 600) {
+                        if (!t.hit) hp -= 12;
                         activeTiles.splice(i, 1);
                     }
                 }
 
-                // HP Bar
-                ctx.fillStyle = "#c8c8c8";
-                ctx.beginPath(); ctx.roundRect(15, 15, 150, 15, 4); ctx.fill();
+                // 血量
                 ctx.fillStyle = hp < 30 ? "#f03250" : "#28c764";
-                ctx.beginPath(); ctx.roundRect(15, 15, 150 * (hp / 100), 15, 4); ctx.fill();
+                ctx.fillRect(15, 15, hp * 1.5, 15);
 
-                // HUD Text
-                ctx.fillStyle = "#282828";
+                // 分数
+                ctx.fillStyle = "#222";
                 ctx.font = "16px Arial";
-                ctx.textAlign = "left";
-                ctx.fillText(`Score: ${score} | Rnd: ${currentRound}`, 15, 50);
+                ctx.fillText("Score: " + score, 15, 45);
 
-                // Grade
-                let grade = getGrade(performancePoints);
-                ctx.font = "bold 36px Arial";
-                ctx.textAlign = "right";
-                ctx.fillStyle = grade === "S" ? "#e6960a" : "#282828";
-                ctx.fillText(grade, 400 - 15, 45);
-
-                // Stop Button
-                let sb = buttons.STOP;
-                ctx.fillStyle = sb.color;
-                ctx.beginPath(); ctx.roundRect(sb.x, sb.y, sb.w, sb.h, 6); ctx.fill();
-                ctx.fillStyle = "#fff";
-                ctx.font = "bold 14px Arial";
-                ctx.fillText(sb.label, sb.x + sb.w/2, sb.y + sb.h/2 + 5);
-
-                // Feedback
+                // 反馈
                 if (feedbackTimer > 0) {
                     ctx.fillStyle = feedbackColor;
                     ctx.font = "bold 24px Arial";
@@ -349,53 +255,18 @@
                     feedbackTimer--;
                 }
 
-            } else if (currentState === "GAME_OVER") {
-                ctx.fillStyle = "#dc3545";
-                ctx.font = "bold 40px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText("SONG FAILED", 200, 220);
-                ctx.fillStyle = "#555";
-                ctx.font = "16px Arial";
-                ctx.fillText(`FAILED AT ROUND ${currentRound}`, 200, 260);
-
-                let finalGrade = getGrade(performancePoints);
-                ctx.fillStyle = finalGrade === "S" ? "#e6960a" : "#282828";
-                ctx.font = "bold 70px Impact";
-                ctx.fillText(finalGrade, 200, 340);
-
-                // Restart button
-                let rb = buttons.RESTART;
-                ctx.fillStyle = rb.color;
-                ctx.beginPath(); ctx.roundRect(rb.x, rb.y, rb.w, rb.h, 10); ctx.fill();
-                ctx.fillStyle = "#fff";
-                ctx.font = "bold 20px Arial";
-                ctx.fillText(rb.label, rb.x + rb.w/2, rb.y + rb.h/2 + 7);
+                // 游戏结束
+                if (hp <= 0) {
+                    currentState = "MENU";
+                    userAudio.pause();
+                    userAudio.currentTime = 0;
+                }
             }
 
             requestAnimationFrame(update);
         }
 
-        // Draw grid and hit line
-        function drawGuidelines() {
-            ctx.strokeStyle = "#969696";
-            ctx.lineWidth = 2;
-            for (let i = 1; i < 4; i++) {
-                ctx.beginPath();
-                ctx.moveTo(i * COLUMN_WIDTH, 0);
-                ctx.lineTo(i * COLUMN_WIDTH, 600);
-                ctx.stroke();
-            }
-
-            ctx.strokeStyle = "#3296f0";
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.moveTo(0, HIT_LINE_Y);
-            ctx.lineTo(400, HIT_LINE_Y);
-            ctx.stroke();
-        }
-
-        // Start game
-        requestAnimationFrame(update);
+        update();
     </script>
 </body>
 </html>
