@@ -122,6 +122,7 @@
         </div>
     </div>
 
+    <!-- Load YouTube IFrame API from official CDN -->
     <script src="https://www.youtube.com/iframe_api"></script>
 
     <script>
@@ -465,20 +466,4 @@
 
                 // Display UI stats strip overhead overlays
                 ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, 400, 50);
-                ctx.fillStyle = hp < 30 ? "#dc3545" : "#28a745"; ctx.fillRect(20, 18, Math.max(0, hp) * 1.5, 14);
-                ctx.fillStyle = "#ffffff"; ctx.font = "bold 16px Arial"; ctx.textAlign = "left";
-                ctx.fillText("SCORE: " + score, 200, 30);
-
-                if (feedbackTimer > 0) {
-                    ctx.fillStyle = feedbackColor; ctx.font = "bold 26px Arial"; ctx.textAlign = "center";
-                    ctx.fillText(feedbackText, 200, 300); feedbackTimer--;
-                }
-
-                if (hp <= 0) endGameSession();
-            }
-            requestAnimationFrame(update);
-        }
-        update();
-    </script>
-</body>
-</html>
+                ctx.fillStyle = hp < 30 ? "#dc3545" : "#28a
